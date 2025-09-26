@@ -142,8 +142,7 @@ func (ns *NotificationService) sendQueueNotification(subject Subject) {
 	}
 
 	joinButton := tgbotapi.NewInlineKeyboardButtonData("Записаться", fmt.Sprintf("join_%s", shortCode))
-	queueButton := tgbotapi.NewInlineKeyboardButtonData("Текущая очередь", fmt.Sprintf("queue_%s", shortCode))
-	keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{joinButton, queueButton})
+	keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{joinButton})
 
 	msg := tgbotapi.NewMessage(ns.config.QueueChatID, text)
 	msg.ParseMode = "Markdown"
@@ -192,15 +191,6 @@ func (ns *NotificationService) HandleCallbackQuery(callbackQuery *tgbotapi.Callb
 			callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Предмет не найден")
 			ns.bot.Request(callback)
 		}
-	} else if strings.HasPrefix(data, "queue_") {
-		shortCode := strings.TrimPrefix(data, "queue_")
-		subjectName := ns.findSubjectByShortCode(shortCode)
-		if subjectName != "" {
-			ns.handleShowQueue(callbackQuery, subjectName)
-		} else {
-			callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Предмет не найден")
-			ns.bot.Request(callback)
-		}
 	}
 }
 
@@ -219,21 +209,15 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 
 	realName := ns.queueManager.GetUserRealName(user.UserName, user.FirstName, user.LastName)
 	if realName == "" {
-		emptyCallback := tgbotapi.NewCallback(callbackQuery.ID, "")
-		ns.bot.Request(emptyCallback)
-
-		msg := tgbotapi.NewMessage(int64(callbackQuery.From.ID), "❌ Не удалось определить ваше реальное имя. Обратитесь к администратору.")
-		ns.bot.Send(msg)
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Не удалось определить ваше реальное имя")
+		ns.bot.Request(callback)
 		return
 	}
 
 	position, joined := ns.queueManager.JoinQueue(subjectName, realName)
 	if !joined {
-		emptyCallback := tgbotapi.NewCallback(callbackQuery.ID, "")
-		ns.bot.Request(emptyCallback)
-
-		msg := tgbotapi.NewMessage(int64(callbackQuery.From.ID), "❌ Вы уже записаны в очередь на этот предмет!")
-		ns.bot.Send(msg)
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Вы уже записаны в очередь на этот предмет!")
+		ns.bot.Request(callback)
 		return
 	}
 
@@ -242,64 +226,40 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		log.Printf("Error adding to Google Sheets: %v", err)
 		ns.queueManager.RemoveFromQueue(subjectName, realName)
 
-		emptyCallback := tgbotapi.NewCallback(callbackQuery.ID, "")
-		ns.bot.Request(emptyCallback)
-
-		msg := tgbotapi.NewMessage(int64(callbackQuery.From.ID), "❌ Ошибка при записи в таблицу. Попробуйте позже.")
-		ns.bot.Send(msg)
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при записи в таблицу")
+		ns.bot.Request(callback)
 		return
 	}
 
-	emptyCallback := tgbotapi.NewCallback(callbackQuery.ID, "")
-	ns.bot.Request(emptyCallback)
+	callback := tgbotapi.NewCallback(callbackQuery.ID, "✅ Вы записались в очередь!")
+	ns.bot.Request(callback)
 
-	queuePosition, previousUser, _ := ns.queueManager.GetQueueInfo(subjectName, realName)
+	lastName = extractLastName(realName)
+	chatMessage := fmt.Sprintf("✅ %s записался в очередь на \"%s\" (место: %d)", lastName, subjectName, position)
 
-	var messageText string
-	if queuePosition == 1 {
-		messageText = fmt.Sprintf("✅ Вы успешно записались на предмет \"%s\"!\n👤 Вы первый в очереди!", subjectName)
-	} else if previousUser != "" {
-		previousLastName := extractLastName(previousUser)
-		messageText = fmt.Sprintf("✅ Вы успешно записались на предмет \"%s\"!\n👤 Ваше место в очереди: %d\n📝 Вы идете после: %s",
-			subjectName, queuePosition, previousLastName)
-	} else {
-		messageText = fmt.Sprintf("✅ Вы успешно записались на предмет \"%s\"!\n👤 Ваше место в очереди: %d",
-			subjectName, queuePosition)
-	}
-
-	msg := tgbotapi.NewMessage(int64(callbackQuery.From.ID), messageText)
+	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, chatMessage)
 	if _, err := ns.bot.Send(msg); err != nil {
-		log.Printf("Error sending success message to user %s: %v", realName, err)
-		groupMsg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, messageText)
-		ns.bot.Send(groupMsg)
+		log.Printf("Error sending chat message: %v", err)
 	}
-
-	log.Printf("User %s joined queue for %s (position %d)", realName, subjectName, position)
-}
-
-func (ns *NotificationService) handleShowQueue(callbackQuery *tgbotapi.CallbackQuery, subjectName string) {
-	emptyCallback := tgbotapi.NewCallback(callbackQuery.ID, "")
-	ns.bot.Request(emptyCallback)
 
 	queue := ns.queueManager.GetQueue(subjectName)
-
-	var messageText string
+	var queueMessage string
 	if len(queue) == 0 {
-		messageText = fmt.Sprintf("📋 Текущая очередь по предмету \"%s\":\n\n❌ Очередь пуста", subjectName)
+		queueMessage = fmt.Sprintf("📋 Текущая очередь на \"%s\":\n\n❌ Очередь пуста", subjectName)
 	} else {
-		messageText = fmt.Sprintf("📋 Текущая очередь по предмету \"%s\":\n\n", subjectName)
+		queueMessage = fmt.Sprintf("📋 Текущая очередь на \"%s\":\n\n", subjectName)
 		for i, person := range queue {
-			lastName := extractLastName(person)
-			messageText += fmt.Sprintf("%d. %s\n", i+1, lastName)
+			personLastName := extractLastName(person)
+			queueMessage += fmt.Sprintf("%d. %s\n", i+1, personLastName)
 		}
 	}
 
-	msg := tgbotapi.NewMessage(int64(callbackQuery.From.ID), messageText)
-	if _, err := ns.bot.Send(msg); err != nil {
-		log.Printf("Error sending queue info to user: %v", err)
-		groupMsg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, messageText)
-		ns.bot.Send(groupMsg)
+	queueMsg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, queueMessage)
+	if _, err := ns.bot.Send(queueMsg); err != nil {
+		log.Printf("Error sending queue message: %v", err)
 	}
+
+	log.Printf("User %s joined queue for %s (position %d)", realName, subjectName, position)
 }
 
 func extractLastName(fullName string) string {

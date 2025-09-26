@@ -38,7 +38,7 @@
 
 ## Установка и запуск
 
-1. Установите Go (версия 1.22 или выше)
+1. Установите Go (версия 1.25 или выше)
 
 2. Клонируйте проект:
 ```bash
@@ -147,6 +147,6 @@ go run main.go
 
 ## Требования
 
-- Go 1.22+
+- Go 1.25+
 - Доступ к интернету для работы с Telegram Bot API и Google Sheets API
 - Google Service Account с доступом к Google Sheets API
