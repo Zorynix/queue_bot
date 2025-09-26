@@ -1,0 +1,35 @@
+# Исполняемые файлы
+queue-bot
+*.exe
+
+# Git
+.git
+.gitignore
+
+# Логи
+*.log
+
+# Временные файлы
+*.tmp
+*.temp
+
+# IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS файлы
+.DS_Store
+Thumbs.db
+
+# Docker файлы
+Dockerfile
+.dockerignore
+
+# README
+README.md
+
+# Возможные секретные файлы (будут монтироваться отдельно)
+.env
+*.json.backup

@@ -1,0 +1,22 @@
+services:
+  queue-bot:
+    build: .
+    container_name: queue-bot
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Riga
+    volumes:
+      - ./queue-bot-473307-7b29529cd813.json:/app/credentials/google-credentials.json:ro
+      - ./queue_lessons.txt:/app/queue_lessons.txt:ro
+      - ./user_mapping.json:/app/user_mapping.json:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "queue-bot"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

@@ -38,6 +38,7 @@ func (ns *NotificationService) checkOnStartup() {
 
 	log.Println("🔍 Проверяем предметы при запуске...")
 
+	subjectsFound := 0
 	for _, subject := range subjects {
 		nextSubjectTime := GetNextSubjectTime(subject)
 		if nextSubjectTime == nil {
@@ -51,10 +52,15 @@ func (ns *NotificationService) checkOnStartup() {
 				subject.Name, timeUntilSubject.Round(time.Minute))
 
 			ns.sendQueueNotification(subject)
+			subjectsFound++
 		}
 	}
 
-	log.Println("✅ Проверка при запуске завершена")
+	if subjectsFound > 0 {
+		log.Printf("✅ Проверка при запуске завершена. Отправлено уведомлений: %d", subjectsFound)
+	} else {
+		log.Println("✅ Проверка при запуске завершена. Предметов в ближайшие 24 часа не найдено")
+	}
 }
 
 func (ns *NotificationService) StartScheduler(ctx context.Context) {
