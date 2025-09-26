@@ -1,0 +1,14 @@
+queue-bot
+*.exe
+
+.env
+*.json
+!user_mapping.json.example
+!*.example
+
+go.sum
+
+*.log
+
+*.tmp
+.DS_Store

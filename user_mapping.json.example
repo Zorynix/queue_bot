@@ -1,0 +1,14 @@
+[
+  {
+    "TelegramUsername": "john_doe",
+    "RealName": "Иванов Иван"
+  },
+  {
+    "TelegramUsername": "alice_smith", 
+    "RealName": "Петрова Алиса"
+  },
+  {
+    "TelegramUsername": "bob_johnson",
+    "RealName": "Сидоров Борис"
+  }
+]
