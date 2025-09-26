@@ -227,3 +227,45 @@ func (ss *SheetsService) RemoveFromSheet(subjectName, userName string) error {
 	log.Printf("✅ Успешно удален пользователь '%s' из Google Sheets", userName)
 	return nil
 }
+
+func (ss *SheetsService) GetQueueFromSheet(subjectName string) ([]string, error) {
+	columnName, exists := ss.queueManager.GetColumnMapping(subjectName)
+	if !exists {
+		return nil, fmt.Errorf("no column mapping for subject: %s", subjectName)
+	}
+
+	resp, err := ss.service.Spreadsheets.Values.Get(ss.spreadsheetID, "A1:Z").Do()
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve data from sheet: %w", err)
+	}
+
+	if len(resp.Values) == 0 {
+		return nil, fmt.Errorf("no data found in sheet")
+	}
+
+	headers := resp.Values[0]
+	subjectColumn := -1
+	for i, header := range headers {
+		if headerStr, ok := header.(string); ok && strings.Contains(headerStr, columnName) {
+			subjectColumn = i
+			break
+		}
+	}
+
+	if subjectColumn == -1 {
+		return nil, fmt.Errorf("subject column not found: %s", columnName)
+	}
+
+	var queue []string
+	for i := 1; i < len(resp.Values); i++ {
+		if subjectColumn < len(resp.Values[i]) && resp.Values[i][subjectColumn] != nil {
+			cellValue := strings.TrimSpace(fmt.Sprintf("%v", resp.Values[i][subjectColumn]))
+			if cellValue != "" {
+				queue = append(queue, cellValue)
+			}
+		}
+	}
+
+	log.Printf("📋 Очередь из Google Sheets для '%s': %v", subjectName, queue)
+	return queue, nil
+}

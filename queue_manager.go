@@ -240,3 +240,51 @@ func (qm *QueueManager) GetQueue(subjectName string) []string {
 	copy(result, queue)
 	return result
 }
+
+func (qm *QueueManager) SyncWithSheets(subjectName string, queueFromSheets []string) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+
+	log.Printf("🔄 Синхронизация очереди для предмета '%s': %v", subjectName, queueFromSheets)
+	qm.subjectQueues[subjectName] = make([]string, len(queueFromSheets))
+	copy(qm.subjectQueues[subjectName], queueFromSheets)
+}
+
+func (qm *QueueManager) GetUserPositionInQueue(subjectName, realName string) int {
+	qm.mu.RLock()
+	defer qm.mu.RUnlock()
+
+	queue, exists := qm.subjectQueues[subjectName]
+	if !exists {
+		return -1
+	}
+
+	for i, name := range queue {
+		if name == realName {
+			return i + 1
+		}
+	}
+
+	return -1
+}
+
+func (qm *QueueManager) GetUserMappings() map[string]string {
+	qm.mu.RLock()
+	defer qm.mu.RUnlock()
+
+	result := make(map[string]string, len(qm.userMapping))
+	for k, v := range qm.userMapping {
+		result[k] = v
+	}
+	return result
+}
+
+func (qm *QueueManager) SyncQueueFromSheets(subjectName string, queue []string) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+
+	qm.subjectQueues[subjectName] = make([]string, len(queue))
+	copy(qm.subjectQueues[subjectName], queue)
+
+	log.Printf("🔄 Очередь для %s синхронизирована: %d пользователей", subjectName, len(queue))
+}

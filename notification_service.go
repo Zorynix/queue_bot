@@ -29,6 +29,9 @@ func NewNotificationService(bot *tgbotapi.BotAPI, queueManager *QueueManager, sh
 		queueMessageIDs:   make(map[string]int),
 	}
 
+	log.Println("🔄 Синхронизация очередей с Google Sheets при запуске...")
+	ns.syncAllQueuesFromSheets()
+
 	ns.checkOnStartup()
 
 	return ns
@@ -226,14 +229,35 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		return
 	}
 
-	position, joined := ns.queueManager.JoinQueue(subjectName, realName)
-	if !joined {
-		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Вы уже записаны в очередь на этот предмет!")
+	if err := ns.syncQueueFromSheets(subjectName); err != nil {
+		log.Printf("Warning: Could not sync with Google Sheets: %v", err)
+	}
+
+	lastName := extractLastName(realName)
+
+	currentPosition := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+	if currentPosition > 0 {
+		callback := tgbotapi.NewCallback(callbackQuery.ID, fmt.Sprintf("✅ Вы уже в очереди! Место: %d", currentPosition))
 		ns.bot.Request(callback)
 		return
 	}
 
-	lastName := extractLastName(realName)
+	if err := ns.sheetsService.AddToSheet(subjectName, lastName); err != nil {
+		log.Printf("Error adding to Google Sheets: %v", err)
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при записи в таблицу")
+		ns.bot.Request(callback)
+		return
+	}
+
+	if err := ns.syncQueueFromSheets(subjectName); err != nil {
+		log.Printf("Error syncing after adding to sheets: %v", err)
+	}
+
+	position := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+	if position == -1 {
+		position = 1
+	}
+
 	if err := ns.sheetsService.AddToSheet(subjectName, lastName); err != nil {
 		log.Printf("Error adding to Google Sheets: %v", err)
 		ns.queueManager.RemoveFromQueue(subjectName, realName)
@@ -340,6 +364,68 @@ func (ns *NotificationService) handleLeaveQueue(callbackQuery *tgbotapi.Callback
 	ns.updateOrCreateQueueMessage(callbackQuery.Message.Chat.ID, subjectName)
 
 	log.Printf("User %s left queue for %s", realName, subjectName)
+}
+
+func (ns *NotificationService) syncQueueFromSheets(subjectName string) error {
+	queueFromSheets, err := ns.sheetsService.GetQueueFromSheet(subjectName)
+	if err != nil {
+		return fmt.Errorf("failed to get queue from sheets: %w", err)
+	}
+
+	var fullNamesQueue []string
+	for _, lastName := range queueFromSheets {
+		fullName := ns.findFullNameByLastName(lastName)
+		if fullName != "" {
+			fullNamesQueue = append(fullNamesQueue, fullName)
+		} else {
+			fullNamesQueue = append(fullNamesQueue, lastName)
+		}
+	}
+
+	ns.queueManager.SyncWithSheets(subjectName, fullNamesQueue)
+	return nil
+}
+
+func (ns *NotificationService) findFullNameByLastName(lastName string) string {
+	userMappings := ns.queueManager.GetUserMappings()
+
+	for _, realName := range userMappings {
+		if extractLastName(realName) == lastName {
+			return realName
+		}
+	}
+
+	return ""
+}
+
+func (ns *NotificationService) syncAllQueuesFromSheets() {
+	subjects := ns.queueManager.GetSubjects()
+
+	for _, subject := range subjects {
+		log.Printf("🔄 Синхронизация очереди для предмета: %s", subject.Name)
+
+		sheetsQueue, err := ns.sheetsService.GetQueueFromSheet(subject.Name)
+		if err != nil {
+			log.Printf("⚠️  Ошибка при получении очереди из Google Sheets для %s: %v", subject.Name, err)
+			continue
+		}
+
+		var fullNameQueue []string
+		for _, lastName := range sheetsQueue {
+			fullName := ns.findFullNameByLastName(lastName)
+			if fullName != "" {
+				fullNameQueue = append(fullNameQueue, fullName)
+			} else {
+				log.Printf("⚠️  Не найдено полное имя для фамилии: %s", lastName)
+			}
+		}
+
+		ns.queueManager.SyncQueueFromSheets(subject.Name, fullNameQueue)
+
+		log.Printf("✅ Синхронизировано %d пользователей для предмета %s", len(fullNameQueue), subject.Name)
+	}
+
+	log.Println("✅ Синхронизация всех очередей завершена")
 }
 
 func extractLastName(fullName string) string {
