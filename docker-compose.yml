@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Europe/Riga
+    env_file:
+      - .env
     volumes:
       - ./queue-bot-473307-7b29529cd813.json:/app/credentials/google-credentials.json:ro
       - ./queue_lessons.txt:/app/queue_lessons.txt:ro

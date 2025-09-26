@@ -23,7 +23,6 @@ COPY --from=builder /app/queue-bot .
 
 COPY queue_lessons.txt ./
 COPY user_mapping.json ./
-COPY .env ./
 
 RUN mkdir -p /app/credentials
 
