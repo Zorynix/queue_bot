@@ -157,3 +157,73 @@ func (ss *SheetsService) ClearColumn(subjectName string) error {
 
 	return nil
 }
+
+func (ss *SheetsService) RemoveFromSheet(subjectName, userName string) error {
+	log.Printf("🗑️  Попытка удалить из Google Sheets: пользователь=%s, предмет=%s", userName, subjectName)
+
+	columnName, exists := ss.queueManager.GetColumnMapping(subjectName)
+	if !exists {
+		return fmt.Errorf("no column mapping for subject: %s", subjectName)
+	}
+
+	log.Printf("🔍 Ищем колонку: %s", columnName)
+
+	resp, err := ss.service.Spreadsheets.Values.Get(ss.spreadsheetID, "A1:Z").Do()
+	if err != nil {
+		return fmt.Errorf("unable to retrieve data from sheet: %w", err)
+	}
+
+	if len(resp.Values) == 0 {
+		return fmt.Errorf("no data found in sheet")
+	}
+
+	headers := resp.Values[0]
+	subjectColumn := -1
+	for i, header := range headers {
+		if headerStr, ok := header.(string); ok && strings.Contains(headerStr, columnName) {
+			subjectColumn = i
+			log.Printf("📍 Найдена колонка %s на позиции %d", columnName, i)
+			break
+		}
+	}
+
+	if subjectColumn == -1 {
+		return fmt.Errorf("subject column not found: %s", columnName)
+	}
+
+	targetRow := -1
+	log.Printf("🔍 Ищем фамилию '%s' в колонке %d", userName, subjectColumn)
+
+	for i := 1; i < len(resp.Values); i++ {
+		if subjectColumn < len(resp.Values[i]) {
+			cellValue := ""
+			if resp.Values[i][subjectColumn] != nil {
+				cellValue = fmt.Sprintf("%v", resp.Values[i][subjectColumn])
+			}
+			log.Printf("📋 Строка %d, значение: '%s'", i+1, cellValue)
+
+			if cellValue == userName {
+				targetRow = i + 1
+				log.Printf("✅ Найден пользователь '%s' в строке %d", userName, targetRow)
+				break
+			}
+		}
+	}
+
+	if targetRow == -1 {
+		log.Printf("❌ Пользователь '%s' не найден в колонке для предмета '%s'", userName, subjectName)
+		return fmt.Errorf("user %s not found in queue for %s", userName, subjectName)
+	}
+
+	columnLetter := numberToColumnLetter(subjectColumn + 1)
+	clearRange := fmt.Sprintf("%s%d", columnLetter, targetRow)
+	log.Printf("🗑️  Очищаем ячейку: %s", clearRange)
+
+	_, err = ss.service.Spreadsheets.Values.Clear(ss.spreadsheetID, clearRange, &sheets.ClearValuesRequest{}).Do()
+	if err != nil {
+		return fmt.Errorf("unable to clear cell in sheet: %w", err)
+	}
+
+	log.Printf("✅ Успешно удален пользователь '%s' из Google Sheets", userName)
+	return nil
+}

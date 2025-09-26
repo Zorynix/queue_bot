@@ -188,12 +188,18 @@ func GetNextSubjectTime(subject Subject) *time.Time {
 
 	targetWeekday := parseWeekday(subject.Day)
 	if targetWeekday == -1 {
+		log.Printf("Error parsing weekday for %s: %s", subject.Name, subject.Day)
 		return nil
 	}
 
 	daysUntil := (int(targetWeekday) - int(now.Weekday()) + 7) % 7
-	if daysUntil == 0 && now.Hour() > startTime.Hour() {
-		daysUntil = 7
+	if daysUntil == 0 {
+		currentTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, now.Location())
+		subjectTime := time.Date(now.Year(), now.Month(), now.Day(), startTime.Hour(), startTime.Minute(), 0, 0, now.Location())
+
+		if currentTime.After(subjectTime) {
+			daysUntil = 7
+		}
 	}
 
 	nextDate := now.AddDate(0, 0, daysUntil)

@@ -16,6 +16,7 @@ type NotificationService struct {
 	sheetsService     *SheetsService
 	config            *Config
 	sentNotifications map[string]time.Time
+	queueMessageIDs   map[string]int
 }
 
 func NewNotificationService(bot *tgbotapi.BotAPI, queueManager *QueueManager, sheetsService *SheetsService, config *Config) *NotificationService {
@@ -25,6 +26,7 @@ func NewNotificationService(bot *tgbotapi.BotAPI, queueManager *QueueManager, sh
 		sheetsService:     sheetsService,
 		config:            config,
 		sentNotifications: make(map[string]time.Time),
+		queueMessageIDs:   make(map[string]int),
 	}
 
 	ns.checkOnStartup()
@@ -142,7 +144,8 @@ func (ns *NotificationService) sendQueueNotification(subject Subject) {
 	}
 
 	joinButton := tgbotapi.NewInlineKeyboardButtonData("Записаться", fmt.Sprintf("join_%s", shortCode))
-	keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{joinButton})
+	leaveButton := tgbotapi.NewInlineKeyboardButtonData("Уйти из очереди", fmt.Sprintf("leave_%s", shortCode))
+	keyboard := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{joinButton, leaveButton})
 
 	msg := tgbotapi.NewMessage(ns.config.QueueChatID, text)
 	msg.ParseMode = "Markdown"
@@ -187,6 +190,15 @@ func (ns *NotificationService) HandleCallbackQuery(callbackQuery *tgbotapi.Callb
 		subjectName := ns.findSubjectByShortCode(shortCode)
 		if subjectName != "" {
 			ns.handleJoinQueue(callbackQuery, subjectName)
+		} else {
+			callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Предмет не найден")
+			ns.bot.Request(callback)
+		}
+	} else if strings.HasPrefix(data, "leave_") {
+		shortCode := strings.TrimPrefix(data, "leave_")
+		subjectName := ns.findSubjectByShortCode(shortCode)
+		if subjectName != "" {
+			ns.handleLeaveQueue(callbackQuery, subjectName)
 		} else {
 			callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Предмет не найден")
 			ns.bot.Request(callback)
@@ -242,6 +254,12 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		log.Printf("Error sending chat message: %v", err)
 	}
 
+	ns.updateOrCreateQueueMessage(callbackQuery.Message.Chat.ID, subjectName)
+
+	log.Printf("User %s joined queue for %s (position %d)", realName, subjectName, position)
+}
+
+func (ns *NotificationService) updateOrCreateQueueMessage(chatID int64, subjectName string) {
 	queue := ns.queueManager.GetQueue(subjectName)
 	var queueMessage string
 	if len(queue) == 0 {
@@ -254,12 +272,74 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		}
 	}
 
-	queueMsg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, queueMessage)
-	if _, err := ns.bot.Send(queueMsg); err != nil {
+	if messageID, exists := ns.queueMessageIDs[subjectName]; exists {
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, queueMessage)
+		if _, err := ns.bot.Send(editMsg); err != nil {
+			log.Printf("Error updating queue message: %v", err)
+
+			ns.createNewQueueMessage(chatID, subjectName, queueMessage)
+		}
+	} else {
+		ns.createNewQueueMessage(chatID, subjectName, queueMessage)
+	}
+}
+
+func (ns *NotificationService) createNewQueueMessage(chatID int64, subjectName string, queueMessage string) {
+	queueMsg := tgbotapi.NewMessage(chatID, queueMessage)
+	sentMsg, err := ns.bot.Send(queueMsg)
+	if err != nil {
 		log.Printf("Error sending queue message: %v", err)
+		return
 	}
 
-	log.Printf("User %s joined queue for %s (position %d)", realName, subjectName, position)
+	ns.queueMessageIDs[subjectName] = sentMsg.MessageID
+}
+
+func (ns *NotificationService) handleLeaveQueue(callbackQuery *tgbotapi.CallbackQuery, subjectName string) {
+	user := callbackQuery.From
+
+	realName := ns.queueManager.GetUserRealName(user.UserName, user.FirstName, user.LastName)
+	if realName == "" {
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Не удалось определить ваше реальное имя")
+		ns.bot.Request(callback)
+		return
+	}
+
+	queue := ns.queueManager.GetQueue(subjectName)
+	found := false
+	for _, person := range queue {
+		if person == realName {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Вы не записаны в очередь на этот предмет!")
+		ns.bot.Request(callback)
+		return
+	}
+
+	ns.queueManager.RemoveFromQueue(subjectName, realName)
+
+	lastName := extractLastName(realName)
+	if err := ns.sheetsService.RemoveFromSheet(subjectName, lastName); err != nil {
+		log.Printf("Error removing from Google Sheets: %v", err)
+	}
+
+	callback := tgbotapi.NewCallback(callbackQuery.ID, "✅ Вы вышли из очереди!")
+	ns.bot.Request(callback)
+
+	chatMessage := fmt.Sprintf("❌ %s вышел из очереди на \"%s\"", lastName, subjectName)
+
+	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, chatMessage)
+	if _, err := ns.bot.Send(msg); err != nil {
+		log.Printf("Error sending leave message: %v", err)
+	}
+
+	ns.updateOrCreateQueueMessage(callbackQuery.Message.Chat.ID, subjectName)
+
+	log.Printf("User %s left queue for %s", realName, subjectName)
 }
 
 func extractLastName(fullName string) string {
