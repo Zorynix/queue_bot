@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -17,6 +18,8 @@ type NotificationService struct {
 	config            *Config
 	sentNotifications map[string]time.Time
 	queueMessageIDs   map[string]int
+	activeOperations  map[string]time.Time
+	operationsMutex   sync.Mutex
 }
 
 func NewNotificationService(bot *tgbotapi.BotAPI, queueManager *QueueManager, sheetsService *SheetsService, config *Config) *NotificationService {
@@ -27,6 +30,7 @@ func NewNotificationService(bot *tgbotapi.BotAPI, queueManager *QueueManager, sh
 		config:            config,
 		sentNotifications: make(map[string]time.Time),
 		queueMessageIDs:   make(map[string]int),
+		activeOperations:  make(map[string]time.Time),
 	}
 
 	log.Println("🔄 Синхронизация очередей с Google Sheets при запуске...")
@@ -71,8 +75,10 @@ func (ns *NotificationService) checkOnStartup() {
 func (ns *NotificationService) StartScheduler(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	cleanupTicker := time.NewTicker(24 * time.Hour)
+	operationsCleanupTicker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	defer cleanupTicker.Stop()
+	defer operationsCleanupTicker.Stop()
 
 	for {
 		select {
@@ -84,6 +90,8 @@ func (ns *NotificationService) StartScheduler(ctx context.Context) {
 			ns.checkAndClearFinishedSubjects()
 		case <-cleanupTicker.C:
 			ns.cleanupOldNotifications()
+		case <-operationsCleanupTicker.C:
+			ns.cleanupStaleOperations()
 		}
 	}
 }
@@ -185,6 +193,30 @@ func (ns *NotificationService) cleanupOldNotifications() {
 	}
 }
 
+func (ns *NotificationService) cleanupStaleOperations() {
+	ns.operationsMutex.Lock()
+	defer ns.operationsMutex.Unlock()
+
+	now := time.Now()
+	staleThreshold := 1 * time.Minute
+
+	var staleOperations []string
+	for operationKey, startTime := range ns.activeOperations {
+		if now.Sub(startTime) > staleThreshold {
+			staleOperations = append(staleOperations, operationKey)
+		}
+	}
+
+	for _, operationKey := range staleOperations {
+		delete(ns.activeOperations, operationKey)
+		log.Printf("Cleaned up stale operation: %s", operationKey)
+	}
+
+	if len(staleOperations) > 0 {
+		log.Printf("Cleaned up %d stale operations", len(staleOperations))
+	}
+}
+
 func (ns *NotificationService) HandleCallbackQuery(callbackQuery *tgbotapi.CallbackQuery) {
 	data := callbackQuery.Data
 
@@ -222,6 +254,30 @@ func (ns *NotificationService) findSubjectByShortCode(shortCode string) string {
 func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQuery, subjectName string) {
 	user := callbackQuery.From
 
+	operationKey := fmt.Sprintf("%d_%s", user.ID, subjectName)
+
+	ns.operationsMutex.Lock()
+	if startTime, exists := ns.activeOperations[operationKey]; exists {
+		ns.operationsMutex.Unlock()
+
+		if time.Since(startTime) > 30*time.Second {
+			log.Printf("Join operation %s seems stale, allowing new request", operationKey)
+		} else {
+			callback := tgbotapi.NewCallback(callbackQuery.ID, "⏳ Ваш запрос уже обрабатывается, подождите...")
+			ns.bot.Request(callback)
+			return
+		}
+	}
+
+	ns.activeOperations[operationKey] = time.Now()
+	ns.operationsMutex.Unlock()
+
+	defer func() {
+		ns.operationsMutex.Lock()
+		delete(ns.activeOperations, operationKey)
+		ns.operationsMutex.Unlock()
+	}()
+
 	realName := ns.queueManager.GetUserRealName(user.UserName, user.FirstName, user.LastName)
 	if realName == "" {
 		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Не удалось определить ваше реальное имя")
@@ -233,8 +289,6 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		log.Printf("Warning: Could not sync with Google Sheets: %v", err)
 	}
 
-	lastName := extractLastName(realName)
-
 	currentPosition := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
 	if currentPosition > 0 {
 		callback := tgbotapi.NewCallback(callbackQuery.ID, fmt.Sprintf("✅ Вы уже в очереди! Место: %d", currentPosition))
@@ -242,8 +296,20 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		return
 	}
 
+	position, wasAdded := ns.queueManager.JoinQueue(subjectName, realName)
+	if !wasAdded {
+		position = ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+		callback := tgbotapi.NewCallback(callbackQuery.ID, fmt.Sprintf("✅ Вы уже в очереди! Место: %d", position))
+		ns.bot.Request(callback)
+		return
+	}
+
+	lastName := extractLastName(realName)
+
 	if err := ns.sheetsService.AddToSheet(subjectName, lastName); err != nil {
 		log.Printf("Error adding to Google Sheets: %v", err)
+
+		ns.queueManager.RemoveFromQueue(subjectName, realName)
 		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при записи в таблицу")
 		ns.bot.Request(callback)
 		return
@@ -253,25 +319,15 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		log.Printf("Error syncing after adding to sheets: %v", err)
 	}
 
-	position := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
-	if position == -1 {
-		position = 1
-	}
-
-	if err := ns.sheetsService.AddToSheet(subjectName, lastName); err != nil {
-		log.Printf("Error adding to Google Sheets: %v", err)
-		ns.queueManager.RemoveFromQueue(subjectName, realName)
-
-		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при записи в таблицу")
-		ns.bot.Request(callback)
-		return
+	finalPosition := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+	if finalPosition == -1 {
+		finalPosition = position
 	}
 
 	callback := tgbotapi.NewCallback(callbackQuery.ID, "✅ Вы записались в очередь!")
 	ns.bot.Request(callback)
 
-	lastName = extractLastName(realName)
-	chatMessage := fmt.Sprintf("✅ %s записался в очередь на \"%s\" (место: %d)", lastName, subjectName, position)
+	chatMessage := fmt.Sprintf("✅ %s записался в очередь на \"%s\" (место: %d)", lastName, subjectName, finalPosition)
 
 	msg := tgbotapi.NewMessage(callbackQuery.Message.Chat.ID, chatMessage)
 	if _, err := ns.bot.Send(msg); err != nil {
@@ -280,7 +336,7 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 
 	ns.updateOrCreateQueueMessage(callbackQuery.Message.Chat.ID, subjectName)
 
-	log.Printf("User %s joined queue for %s (position %d)", realName, subjectName, position)
+	log.Printf("User %s joined queue for %s (position %d)", realName, subjectName, finalPosition)
 }
 
 func (ns *NotificationService) updateOrCreateQueueMessage(chatID int64, subjectName string) {
@@ -322,6 +378,28 @@ func (ns *NotificationService) createNewQueueMessage(chatID int64, subjectName s
 func (ns *NotificationService) handleLeaveQueue(callbackQuery *tgbotapi.CallbackQuery, subjectName string) {
 	user := callbackQuery.From
 
+	operationKey := fmt.Sprintf("leave_%d_%s", user.ID, subjectName)
+
+	ns.operationsMutex.Lock()
+	if startTime, exists := ns.activeOperations[operationKey]; exists {
+		ns.operationsMutex.Unlock()
+		if time.Since(startTime) > 30*time.Second {
+			log.Printf("Leave operation %s seems stale, allowing new request", operationKey)
+		} else {
+			callback := tgbotapi.NewCallback(callbackQuery.ID, "⏳ Ваш запрос уже обрабатывается, подождите...")
+			ns.bot.Request(callback)
+			return
+		}
+	}
+	ns.activeOperations[operationKey] = time.Now()
+	ns.operationsMutex.Unlock()
+
+	defer func() {
+		ns.operationsMutex.Lock()
+		delete(ns.activeOperations, operationKey)
+		ns.operationsMutex.Unlock()
+	}()
+
 	realName := ns.queueManager.GetUserRealName(user.UserName, user.FirstName, user.LastName)
 	if realName == "" {
 		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Не удалось определить ваше реальное имя")
@@ -329,16 +407,12 @@ func (ns *NotificationService) handleLeaveQueue(callbackQuery *tgbotapi.Callback
 		return
 	}
 
-	queue := ns.queueManager.GetQueue(subjectName)
-	found := false
-	for _, person := range queue {
-		if person == realName {
-			found = true
-			break
-		}
+	if err := ns.syncQueueFromSheets(subjectName); err != nil {
+		log.Printf("Warning: Could not sync with Google Sheets: %v", err)
 	}
 
-	if !found {
+	currentPosition := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+	if currentPosition <= 0 {
 		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Вы не записаны в очередь на этот предмет!")
 		ns.bot.Request(callback)
 		return
@@ -347,8 +421,19 @@ func (ns *NotificationService) handleLeaveQueue(callbackQuery *tgbotapi.Callback
 	ns.queueManager.RemoveFromQueue(subjectName, realName)
 
 	lastName := extractLastName(realName)
+
 	if err := ns.sheetsService.RemoveFromSheet(subjectName, lastName); err != nil {
 		log.Printf("Error removing from Google Sheets: %v", err)
+
+		position, _ := ns.queueManager.JoinQueue(subjectName, realName)
+		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при удалении из таблицы")
+		ns.bot.Request(callback)
+		log.Printf("Restored user %s to queue after Sheets error (position %d)", realName, position)
+		return
+	}
+
+	if err := ns.syncQueueFromSheets(subjectName); err != nil {
+		log.Printf("Error syncing after removing from sheets: %v", err)
 	}
 
 	callback := tgbotapi.NewCallback(callbackQuery.ID, "✅ Вы вышли из очереди!")
