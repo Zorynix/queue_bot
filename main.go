@@ -35,6 +35,10 @@ func main() {
 		log.Fatal("Error initializing Google Sheets service:", err)
 	}
 
+	if err := sheetsService.RestoreColumnHeaders(); err != nil {
+		log.Printf("Warning: Could not restore column headers: %v", err)
+	}
+
 	bot, err := tgbotapi.NewBotAPI(config.TelegramBotToken)
 	if err != nil {
 		log.Fatal("Error creating bot:", err)

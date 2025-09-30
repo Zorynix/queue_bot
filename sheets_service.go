@@ -73,9 +73,12 @@ func (ss *SheetsService) AddToSheet(subjectName, userName string) error {
 	headerRow := resp.Values[0]
 	subjectColumn := -1
 	for i, header := range headerRow {
-		if headerStr, ok := header.(string); ok && strings.Contains(headerStr, columnName) {
-			subjectColumn = i
-			break
+		if headerStr, ok := header.(string); ok {
+			if strings.Contains(headerStr, columnName) && len(headerStr) <= 20 {
+				subjectColumn = i
+				log.Printf("🔍 Найден заголовок столбца '%s' (искали '%s') в позиции %d", headerStr, columnName, i)
+				break
+			}
 		}
 	}
 
@@ -94,7 +97,7 @@ func (ss *SheetsService) AddToSheet(subjectName, userName string) error {
 	}
 
 	targetRow := -1
-	lastFilledRow := 0
+	lastFilledRow := 1 // Начинаем со строки 1 (после заголовков), а не с 0
 
 	for i := 1; i < len(resp.Values); i++ {
 		if subjectColumn < len(resp.Values[i]) && resp.Values[i][subjectColumn] != nil {
@@ -106,6 +109,9 @@ func (ss *SheetsService) AddToSheet(subjectName, userName string) error {
 	}
 
 	targetRow = lastFilledRow + 1
+	if targetRow <= 1 {
+		targetRow = 2
+	}
 
 	columnLetter := numberToColumnLetter(subjectColumn + 1)
 	writeRange := fmt.Sprintf("%s%d", columnLetter, targetRow)
@@ -149,9 +155,12 @@ func (ss *SheetsService) ClearColumn(subjectName string) error {
 	headerRow := resp.Values[0]
 	subjectColumn := -1
 	for i, header := range headerRow {
-		if headerStr, ok := header.(string); ok && strings.Contains(headerStr, columnName) {
-			subjectColumn = i
-			break
+		if headerStr, ok := header.(string); ok {
+			if strings.Contains(headerStr, columnName) && len(headerStr) <= 20 {
+				subjectColumn = i
+				log.Printf("🔍 Найден заголовок столбца '%s' (искали '%s') в позиции %d", headerStr, columnName, i)
+				break
+			}
 		}
 	}
 
@@ -192,10 +201,12 @@ func (ss *SheetsService) RemoveFromSheet(subjectName, userName string) error {
 	headers := resp.Values[0]
 	subjectColumn := -1
 	for i, header := range headers {
-		if headerStr, ok := header.(string); ok && strings.Contains(headerStr, columnName) {
-			subjectColumn = i
-			log.Printf("📍 Найдена колонка %s на позиции %d", columnName, i)
-			break
+		if headerStr, ok := header.(string); ok {
+			if strings.Contains(headerStr, columnName) && len(headerStr) <= 20 {
+				subjectColumn = i
+				log.Printf("📍 Найдена колонка %s на позиции %d (заголовок: '%s')", columnName, i, headerStr)
+				break
+			}
 		}
 	}
 
@@ -240,6 +251,89 @@ func (ss *SheetsService) RemoveFromSheet(subjectName, userName string) error {
 	return nil
 }
 
+func (ss *SheetsService) RestoreColumnHeaders() error {
+	log.Println("🔧 Проверяем и восстанавливаем заголовки столбцов...")
+
+	resp, err := ss.service.Spreadsheets.Values.Get(ss.spreadsheetID, "A1:Z1").Do()
+	if err != nil {
+		return fmt.Errorf("unable to retrieve headers from sheet: %w", err)
+	}
+
+	if len(resp.Values) == 0 || len(resp.Values[0]) == 0 {
+		return fmt.Errorf("no headers found in sheet")
+	}
+
+	headers := resp.Values[0]
+	columnMappings := map[string]string{
+		"Микросервисная архитектура":                             "Микросервисы",
+		"Стандартизация и сертификация программного обеспечения": "СИСПО",
+		"Сопровождение программных систем":                       "СПС",
+		"Управление информационно-технологическими проектами":    "УИТП",
+		"Оценка параметров функционирования программных систем":  "ОПФПС",
+		"Проектирование программных систем":                      "ППС",
+		"Технологии и инструментарий анализа больших данных":     "БИГДАТА",
+	}
+
+	for i, header := range headers {
+		if headerStr, ok := header.(string); ok {
+			headerStr = strings.TrimSpace(headerStr)
+			foundValidHeader := false
+			for _, columnName := range columnMappings {
+				if strings.Contains(headerStr, columnName) && len(headerStr) <= 20 {
+					foundValidHeader = true
+					break
+				}
+			}
+
+			if !foundValidHeader && headerStr != "" && len(headerStr) > 3 {
+				log.Printf("⚠️  Обнаружен подозрительный заголовок в столбце %d: '%s'", i+1, headerStr)
+
+				var correctHeader string
+				switch i {
+				case 1:
+					correctHeader = "СИСПО"
+				case 2:
+					correctHeader = "СИСПО"
+				case 3:
+					correctHeader = "СПС"
+				case 4:
+					correctHeader = "УИТП"
+				case 5:
+					correctHeader = "ОПФПС"
+				case 6:
+					correctHeader = "ППС"
+				case 7:
+					correctHeader = "БИГДАТА"
+				}
+
+				if correctHeader != "" {
+					columnLetter := numberToColumnLetter(i + 1)
+					writeRange := fmt.Sprintf("%s1", columnLetter)
+
+					values := [][]interface{}{
+						{correctHeader},
+					}
+
+					valueRange := &sheets.ValueRange{
+						Values: values,
+					}
+
+					_, err = ss.service.Spreadsheets.Values.Update(ss.spreadsheetID, writeRange, valueRange).
+						ValueInputOption("RAW").Do()
+
+					if err != nil {
+						log.Printf("❌ Ошибка восстановления заголовка в %s: %v", writeRange, err)
+					} else {
+						log.Printf("✅ Восстановлен заголовок в столбце %s: '%s' → '%s'", columnLetter, headerStr, correctHeader)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func (ss *SheetsService) GetQueueFromSheet(subjectName string) ([]string, error) {
 	columnName, exists := ss.queueManager.GetColumnMapping(subjectName)
 	if !exists {
@@ -258,9 +352,12 @@ func (ss *SheetsService) GetQueueFromSheet(subjectName string) ([]string, error)
 	headers := resp.Values[0]
 	subjectColumn := -1
 	for i, header := range headers {
-		if headerStr, ok := header.(string); ok && strings.Contains(headerStr, columnName) {
-			subjectColumn = i
-			break
+		if headerStr, ok := header.(string); ok {
+			if strings.Contains(headerStr, columnName) && len(headerStr) <= 20 {
+				subjectColumn = i
+				log.Printf("🔍 Найден заголовок столбца '%s' (искали '%s') в позиции %d", headerStr, columnName, i)
+				break
+			}
 		}
 	}
 
