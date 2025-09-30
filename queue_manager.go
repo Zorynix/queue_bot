@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -249,15 +250,26 @@ func (qm *QueueManager) SyncWithSheets(subjectName string, queueFromSheets []str
 
 	var cleanQueue []string
 	seen := make(map[string]bool)
+	duplicatesCount := 0
 
 	for _, name := range queueFromSheets {
-		if name != "" && !seen[name] {
-			cleanQueue = append(cleanQueue, name)
-			seen[name] = true
+		cleanName := strings.TrimSpace(name)
+		if cleanName != "" {
+			if seen[cleanName] {
+				duplicatesCount++
+				log.Printf("⚠️  Обнаружен дубликат в Google Sheets: %s для предмета %s", cleanName, subjectName)
+			} else {
+				cleanQueue = append(cleanQueue, cleanName)
+				seen[cleanName] = true
+			}
 		}
 	}
 
-	log.Printf("🔄 Синхронизация очереди для предмета '%s': %v (очищено от дубликатов: %v)", subjectName, cleanQueue, queueFromSheets)
+	if duplicatesCount > 0 {
+		log.Printf("🔄 Синхронизация очереди для предмета '%s': %v (удалено дубликатов: %d)", subjectName, cleanQueue, duplicatesCount)
+	} else {
+		log.Printf("🔄 Синхронизация очереди для предмета '%s': %v", subjectName, cleanQueue)
+	}
 	qm.subjectQueues[subjectName] = cleanQueue
 }
 

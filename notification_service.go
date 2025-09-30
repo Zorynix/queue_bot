@@ -299,6 +299,17 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 	lastName := extractLastName(realName)
 
 	if err := ns.sheetsService.AddToSheet(subjectName, lastName); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			if syncErr := ns.syncQueueFromSheets(subjectName); syncErr != nil {
+				log.Printf("Error syncing after duplicate detection: %v", syncErr)
+			}
+			finalPosition := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+			if finalPosition > 0 {
+				callback := tgbotapi.NewCallback(callbackQuery.ID, fmt.Sprintf("✅ Вы уже в очереди! Место: %d", finalPosition))
+				ns.bot.Request(callback)
+				return
+			}
+		}
 		log.Printf("Error adding to Google Sheets: %v", err)
 		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при записи в таблицу")
 		ns.bot.Request(callback)

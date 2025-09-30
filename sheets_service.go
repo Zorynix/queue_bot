@@ -87,8 +87,8 @@ func (ss *SheetsService) AddToSheet(subjectName, userName string) error {
 		if subjectColumn < len(resp.Values[i]) && resp.Values[i][subjectColumn] != nil {
 			cellValue := strings.TrimSpace(fmt.Sprintf("%v", resp.Values[i][subjectColumn]))
 			if cellValue == userName {
-				log.Printf("⚠️  Пользователь %s уже есть в таблице для предмета %s", userName, subjectName)
-				return nil
+				log.Printf("⚠️  Пользователь %s уже есть в таблице для предмета %s в строке %d", userName, subjectName, i+1)
+				return fmt.Errorf("user %s already exists in sheet for subject %s", userName, subjectName)
 			}
 		}
 	}
