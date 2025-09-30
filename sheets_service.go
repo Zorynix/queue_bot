@@ -83,17 +83,29 @@ func (ss *SheetsService) AddToSheet(subjectName, userName string) error {
 		return fmt.Errorf("subject column not found: %s (looking for column: %s)", subjectName, columnName)
 	}
 
-	targetRow := -1
 	for i := 1; i < len(resp.Values); i++ {
-		if subjectColumn >= len(resp.Values[i]) || resp.Values[i][subjectColumn] == "" {
-			targetRow = i + 1
-			break
+		if subjectColumn < len(resp.Values[i]) && resp.Values[i][subjectColumn] != nil {
+			cellValue := strings.TrimSpace(fmt.Sprintf("%v", resp.Values[i][subjectColumn]))
+			if cellValue == userName {
+				log.Printf("⚠️  Пользователь %s уже есть в таблице для предмета %s", userName, subjectName)
+				return nil
+			}
 		}
 	}
 
-	if targetRow == -1 {
-		targetRow = len(resp.Values) + 1
+	targetRow := -1
+	lastFilledRow := 0
+
+	for i := 1; i < len(resp.Values); i++ {
+		if subjectColumn < len(resp.Values[i]) && resp.Values[i][subjectColumn] != nil {
+			cellValue := strings.TrimSpace(fmt.Sprintf("%v", resp.Values[i][subjectColumn]))
+			if cellValue != "" {
+				lastFilledRow = i + 1
+			}
+		}
 	}
+
+	targetRow = lastFilledRow + 1
 
 	columnLetter := numberToColumnLetter(subjectColumn + 1)
 	writeRange := fmt.Sprintf("%s%d", columnLetter, targetRow)
@@ -198,13 +210,13 @@ func (ss *SheetsService) RemoveFromSheet(subjectName, userName string) error {
 		if subjectColumn < len(resp.Values[i]) {
 			cellValue := ""
 			if resp.Values[i][subjectColumn] != nil {
-				cellValue = fmt.Sprintf("%v", resp.Values[i][subjectColumn])
+				cellValue = strings.TrimSpace(fmt.Sprintf("%v", resp.Values[i][subjectColumn]))
 			}
 			log.Printf("📋 Строка %d, значение: '%s'", i+1, cellValue)
 
-			if cellValue == userName {
+			if cellValue == userName && targetRow == -1 {
 				targetRow = i + 1
-				log.Printf("✅ Найден пользователь '%s' в строке %d", userName, targetRow)
+				log.Printf("✅ Найден пользователь '%s' в строке %d (первое вхождение)", userName, targetRow)
 				break
 			}
 		}

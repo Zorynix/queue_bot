@@ -296,20 +296,10 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 		return
 	}
 
-	position, wasAdded := ns.queueManager.JoinQueue(subjectName, realName)
-	if !wasAdded {
-		position = ns.queueManager.GetUserPositionInQueue(subjectName, realName)
-		callback := tgbotapi.NewCallback(callbackQuery.ID, fmt.Sprintf("✅ Вы уже в очереди! Место: %d", position))
-		ns.bot.Request(callback)
-		return
-	}
-
 	lastName := extractLastName(realName)
 
 	if err := ns.sheetsService.AddToSheet(subjectName, lastName); err != nil {
 		log.Printf("Error adding to Google Sheets: %v", err)
-
-		ns.queueManager.RemoveFromQueue(subjectName, realName)
 		callback := tgbotapi.NewCallback(callbackQuery.ID, "❌ Ошибка при записи в таблицу")
 		ns.bot.Request(callback)
 		return
@@ -320,8 +310,13 @@ func (ns *NotificationService) handleJoinQueue(callbackQuery *tgbotapi.CallbackQ
 	}
 
 	finalPosition := ns.queueManager.GetUserPositionInQueue(subjectName, realName)
-	if finalPosition == -1 {
-		finalPosition = position
+	if finalPosition <= 0 {
+		position, wasAdded := ns.queueManager.JoinQueue(subjectName, realName)
+		if wasAdded {
+			finalPosition = position
+		} else {
+			finalPosition = ns.queueManager.GetUserPositionInQueue(subjectName, realName)
+		}
 	}
 
 	callback := tgbotapi.NewCallback(callbackQuery.ID, "✅ Вы записались в очередь!")

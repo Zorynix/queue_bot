@@ -120,13 +120,15 @@ func (qm *QueueManager) JoinQueue(subjectName, realName string) (int, bool) {
 
 	queue := qm.subjectQueues[subjectName]
 
-	for _, name := range queue {
+	for i, name := range queue {
 		if name == realName {
-			return 0, false
+			log.Printf("⚠️  Пользователь %s уже есть в очереди %s на позиции %d", realName, subjectName, i+1)
+			return i + 1, false
 		}
 	}
 
 	qm.subjectQueues[subjectName] = append(queue, realName)
+	log.Printf("✅ Пользователь %s добавлен в очередь %s на позицию %d", realName, subjectName, len(qm.subjectQueues[subjectName]))
 	return len(qm.subjectQueues[subjectName]), true
 }
 
@@ -245,9 +247,18 @@ func (qm *QueueManager) SyncWithSheets(subjectName string, queueFromSheets []str
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 
-	log.Printf("🔄 Синхронизация очереди для предмета '%s': %v", subjectName, queueFromSheets)
-	qm.subjectQueues[subjectName] = make([]string, len(queueFromSheets))
-	copy(qm.subjectQueues[subjectName], queueFromSheets)
+	var cleanQueue []string
+	seen := make(map[string]bool)
+
+	for _, name := range queueFromSheets {
+		if name != "" && !seen[name] {
+			cleanQueue = append(cleanQueue, name)
+			seen[name] = true
+		}
+	}
+
+	log.Printf("🔄 Синхронизация очереди для предмета '%s': %v (очищено от дубликатов: %v)", subjectName, cleanQueue, queueFromSheets)
+	qm.subjectQueues[subjectName] = cleanQueue
 }
 
 func (qm *QueueManager) GetUserPositionInQueue(subjectName, realName string) int {
