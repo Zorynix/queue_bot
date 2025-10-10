@@ -107,7 +107,7 @@ func (ns *NotificationService) checkAndSendNotifications() {
 		}
 
 		timeUntilSubject := nextSubjectTime.Sub(now)
-		if timeUntilSubject > 23*time.Hour+50*time.Minute && timeUntilSubject < 24*time.Hour+10*time.Minute {
+		if timeUntilSubject > 23*time.Hour+59*time.Minute && timeUntilSubject < 24*time.Hour+2*time.Minute {
 			ns.sendQueueNotification(subject)
 		}
 	}
