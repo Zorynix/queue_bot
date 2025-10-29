@@ -181,7 +181,9 @@ func (qm *QueueManager) GetQueueInfo(subjectName, realName string) (position int
 }
 
 func GetNextSubjectTime(subject Subject) *time.Time {
-	now := time.Now()
+
+	moscowTZ := getMoscowLocation()
+	now := getMoscowTime()
 
 	startTime, err := time.Parse("15:04", subject.Start)
 	if err != nil {
@@ -197,8 +199,8 @@ func GetNextSubjectTime(subject Subject) *time.Time {
 
 	daysUntil := (int(targetWeekday) - int(now.Weekday()) + 7) % 7
 	if daysUntil == 0 {
-		currentTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, now.Location())
-		subjectTime := time.Date(now.Year(), now.Month(), now.Day(), startTime.Hour(), startTime.Minute(), 0, 0, now.Location())
+		currentTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, moscowTZ)
+		subjectTime := time.Date(now.Year(), now.Month(), now.Day(), startTime.Hour(), startTime.Minute(), 0, 0, moscowTZ)
 
 		if currentTime.After(subjectTime) {
 			daysUntil = 7
@@ -207,7 +209,7 @@ func GetNextSubjectTime(subject Subject) *time.Time {
 
 	nextDate := now.AddDate(0, 0, daysUntil)
 	nextSubjectTime := time.Date(nextDate.Year(), nextDate.Month(), nextDate.Day(),
-		startTime.Hour(), startTime.Minute(), 0, 0, now.Location())
+		startTime.Hour(), startTime.Minute(), 0, 0, moscowTZ)
 
 	return &nextSubjectTime
 }

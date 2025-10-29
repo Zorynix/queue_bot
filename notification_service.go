@@ -42,7 +42,8 @@ func NewNotificationService(bot *tgbotapi.BotAPI, queueManager *QueueManager, sh
 }
 
 func (ns *NotificationService) checkOnStartup() {
-	now := time.Now()
+
+	now := getMoscowTime()
 	subjects := ns.queueManager.GetSubjects()
 
 	log.Println("🔍 Проверяем предметы при запуске...")
@@ -97,7 +98,8 @@ func (ns *NotificationService) StartScheduler(ctx context.Context) {
 }
 
 func (ns *NotificationService) checkAndSendNotifications() {
-	now := time.Now()
+
+	now := getMoscowTime()
 	subjects := ns.queueManager.GetSubjects()
 
 	for _, subject := range subjects {
@@ -114,7 +116,8 @@ func (ns *NotificationService) checkAndSendNotifications() {
 }
 
 func (ns *NotificationService) checkAndClearFinishedSubjects() {
-	now := time.Now()
+
+	now := getMoscowTime()
 	subjects := ns.queueManager.GetSubjects()
 
 	for _, subject := range subjects {
@@ -126,7 +129,8 @@ func (ns *NotificationService) checkAndClearFinishedSubjects() {
 }
 
 func (ns *NotificationService) sendQueueNotification(subject Subject) {
-	now := time.Now()
+
+	now := getMoscowTime()
 
 	nextSubjectTime := GetNextSubjectTime(subject)
 	if nextSubjectTime == nil {

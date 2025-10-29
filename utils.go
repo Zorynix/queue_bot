@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strings"
 	"time"
 )
@@ -34,4 +35,22 @@ func numberToColumnLetter(num int) string {
 		num /= 26
 	}
 	return result
+}
+
+func getMoscowTime() time.Time {
+	moscowTZ, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		log.Printf("Error loading Moscow timezone: %v, falling back to UTC", err)
+		moscowTZ = time.UTC
+	}
+	return time.Now().In(moscowTZ)
+}
+
+func getMoscowLocation() *time.Location {
+	moscowTZ, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		log.Printf("Error loading Moscow timezone: %v, falling back to UTC", err)
+		return time.UTC
+	}
+	return moscowTZ
 }
